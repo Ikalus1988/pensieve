@@ -47,3 +47,7 @@ pensieve hook "之前那个机器人备份提取payload流程" --cwd C:\Users\hp
 ```
 
 If the top routine score is high enough, Pensieve prints hook JSON with `hookSpecificOutput.additionalContext` and increments `use_count`.
+
+## Trust note
+
+Codex may maintain trusted hook hashes in `~/.codex/config.toml` under `[hooks.state]`. `install-codex-hook` intentionally edits only `hooks.json`; it does not synthesize or modify Codex trust hashes. On first use, Codex may ask you to trust the new Pensieve hook, depending on your local Codex version and policy.
