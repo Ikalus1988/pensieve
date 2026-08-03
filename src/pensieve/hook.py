@@ -3,9 +3,9 @@
 import json
 from .store import SearchHit
 
-AUTO_INJECT_THRESHOLD = 0.50
-TRIGGER_DIRECT_THRESHOLD = 0.45
-CANDIDATE_THRESHOLD = 0.35
+AUTO_INJECT_THRESHOLD = 0.65
+TRIGGER_DIRECT_THRESHOLD = 0.55
+CANDIDATE_THRESHOLD = 0.45
 
 
 def _is_trigger_only(hit: SearchHit) -> bool:
