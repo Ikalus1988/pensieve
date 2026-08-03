@@ -71,3 +71,13 @@ def test_trigger_direct_command_injects_at_lower_threshold(tmp_path):
     # Should still inject due to lower threshold
     payload = hook_json(hits)
     assert "additionalContext" in payload
+
+
+def test_trigger_direct_hook_increments_use_count(tmp_path):
+    from pensieve.cli import main
+
+    db = tmp_path / "pensieve.sqlite3"
+    main(["--db", str(db), "--cards-dir", "examples", "index"])
+    main(["--db", str(db), "hook", "sysvars.sv 提取", "--cwd", "C:\\Users\\hp"])
+    with connect(db) as conn:
+        assert stats(conn, "fanuc-payload-pipeline") == {"use_count": 1, "reject_count": 0}

@@ -41,11 +41,15 @@ def build_context(hit: SearchHit, max_chars: int = 700) -> str:
     return text[:max_chars]
 
 
+def should_inject(hit: SearchHit) -> bool:
+    """Return whether a hit is strong enough for hook context injection."""
+    return hit.score >= _effective_threshold(hit)
+
+
 def hook_json(hits: list[SearchHit]) -> str:
     if not hits:
         return "{}"
-    threshold = _effective_threshold(hits[0])
-    if hits[0].score < threshold:
+    if not should_inject(hits[0]):
         return "{}"
     context = build_context(hits[0])
     return json.dumps(
@@ -57,3 +61,4 @@ def hook_json(hits: list[SearchHit]) -> str:
         },
         ensure_ascii=False,
     )
+

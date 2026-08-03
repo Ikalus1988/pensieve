@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .hook import AUTO_INJECT_THRESHOLD, hook_json
+from .hook import hook_json, should_inject
 from .paths import default_cards_dir, default_db_path, default_home, ensure_dirs
 from .routine import load_routine
 from .store import (
@@ -136,7 +136,7 @@ def cmd_hook(args) -> int:
     prompt, cwd = _read_hook_input(args)
     with _conn(args) as conn:
         hits = search(conn, prompt, cwd=cwd, limit=3)
-        if hits and hits[0].score >= AUTO_INJECT_THRESHOLD:
+        if hits and should_inject(hits[0]):
             mark_used(conn, hits[0].routine.id)
     print(hook_json(hits))
     return 0
@@ -296,3 +296,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
