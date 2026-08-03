@@ -56,7 +56,10 @@ def parse_simple_yaml(text: str) -> dict[str, Any]:
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
         if raw.startswith("  - ") and current_key:
-            data.setdefault(current_key, []).append(_strip_quotes(raw[4:]))
+            existing = data.get(current_key)
+            if not isinstance(existing, list):
+                data[current_key] = []
+            data[current_key].append(_strip_quotes(raw[4:]))
             continue
         if ":" not in raw:
             continue

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import re
 import sqlite3
 from typing import Iterable
 
@@ -58,7 +59,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             aliases,
             trigger_phrases,
             checklist,
-            body
+            body,
+            tokenize='trigram'
         );
         """
     )
@@ -239,6 +241,11 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in terms[:12]) or '""'
 
 
+def _has_cjk(text: str) -> bool:
+    """Check if text contains CJK characters."""
+    return any('一' <= ch <= '鿿' or '㐀' <= ch <= '䶿' for ch in text)
+
+
 def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) -> list[SearchHit]:
     init_db(conn)
     q = query.strip()
@@ -260,17 +267,45 @@ def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) 
 
     recall_intent = bool(_contains_any(q, COMPLAINT_PATTERNS))
     seen = {row["id"] for row in rows}
+
+    # CJK LIKE fallback: FTS trigram BM25 scores CJK very low,
+    # so supplement with LIKE when query contains CJK characters.
+    if _has_cjk(q):
+        cjk_terms = re.findall(r'[一-鿿㐀-䶿]{2,}', q)
+        if not cjk_terms:
+            cjk_terms = re.findall(r'[一-鿿㐀-䶿]', q)  # single char fallback
+        for term in cjk_terms[:3]:
+            like_rows = conn.execute(
+                "SELECT *, 1.0 AS rank FROM routines WHERE status IN ('active') AND "
+                "(title LIKE ? OR trigger_phrases LIKE ? OR aliases LIKE ? OR body LIKE ?)",
+                (f"%{term}%",) * 4,
+            ).fetchall()
+            for row in like_rows:
+                if row["id"] not in seen:
+                    rows.append(row)
+                    seen.add(row["id"])
+
     if recall_intent or not rows:
         extra = conn.execute("SELECT *, 0.0 AS rank FROM routines WHERE status IN ('active')").fetchall()
         rows = list(rows) + [row for row in extra if row["id"] not in seen]
 
     hits: list[SearchHit] = []
+    cjk_terms = re.findall(r'[一-鿿㐀-䶿]{2,}', q) if _has_cjk(q) else []
     for row in rows:
         routine = row_to_routine(row)
         why: list[str] = []
         raw_rank = float(row["rank"] or 0.0)
         fts_score = min(0.50, max(0.0, abs(raw_rank) / 10.0))
         score = fts_score
+
+        # CJK LIKE boost: if query has CJK and routine text matches, give a base score
+        if cjk_terms:
+            routine_text = (routine.title + " " + " ".join(routine.trigger_phrases + routine.aliases)).lower()
+            cjk_hits = sum(1 for t in cjk_terms if t in routine_text)
+            if cjk_hits > 0:
+                like_score = min(0.55, 0.30 * cjk_hits)  # 0.30 per CJK term, capped at 0.55
+                score = max(score, like_score)
+                why.append("cjk match")
 
         trigger_matches = _contains_any(q, routine.trigger_phrases + routine.aliases)
         if trigger_matches:
