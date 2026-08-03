@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -166,13 +166,75 @@ def get_routine(conn: sqlite3.Connection, routine_id: str) -> Routine | None:
     return row_to_routine(row) if row else None
 
 
+def _update_card_status(routine: Routine, status: str) -> None:
+    path = Path(routine.body_path)
+    if not path.exists() or path.suffix.lower() != ".md":
+        return
+    text = path.read_text(encoding="utf-8").lstrip("\ufeff")
+    if not text.startswith("---\n"):
+        return
+    end = text.find("\n---", 4)
+    if end == -1:
+        return
+    fm = text[4:end].splitlines()
+    changed = False
+    for i, line in enumerate(fm):
+        if line.strip().startswith("status:"):
+            fm[i] = f"status: {status}"
+            changed = True
+            break
+    if not changed:
+        fm.append(f"status: {status}")
+    path.write_text("---\n" + "\n".join(fm) + text[end:], encoding="utf-8")
+
+
+def set_status(conn: sqlite3.Connection, routine_id: str, status: str, *, persist_card: bool = True) -> Routine | None:
+    init_db(conn)
+    routine = get_routine(conn, routine_id)
+    if routine is None:
+        return None
+    conn.execute("UPDATE routines SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (status, routine_id))
+    conn.commit()
+    if persist_card:
+        routine.status = status
+        _update_card_status(routine, status)
+    return get_routine(conn, routine_id)
+
+
+def reject_routine(conn: sqlite3.Connection, routine_id: str, *, persist_card: bool = False) -> Routine | None:
+    init_db(conn)
+    routine = set_status(conn, routine_id, "rejected", persist_card=persist_card)
+    if routine is None:
+        return None
+    conn.execute("UPDATE routines SET reject_count = reject_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (routine_id,))
+    conn.commit()
+    return get_routine(conn, routine_id)
+
+
+def supersede_routine(conn: sqlite3.Connection, routine_id: str, *, persist_card: bool = False) -> Routine | None:
+    return set_status(conn, routine_id, "superseded", persist_card=persist_card)
+
+
+def mark_used(conn: sqlite3.Connection, routine_id: str) -> None:
+    init_db(conn)
+    conn.execute("UPDATE routines SET use_count = use_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (routine_id,))
+    conn.commit()
+
+
+def stats(conn: sqlite3.Connection, routine_id: str) -> dict[str, int] | None:
+    init_db(conn)
+    row = conn.execute("SELECT use_count, reject_count FROM routines WHERE id = ?", (routine_id,)).fetchone()
+    if row is None:
+        return None
+    return {"use_count": int(row["use_count"]), "reject_count": int(row["reject_count"])}
+
+
 def _contains_any(text: str, needles: Iterable[str]) -> list[str]:
     text_l = text.lower()
     return [n for n in needles if n and n.lower() in text_l]
 
 
 def _fts_query(query: str) -> str:
-    # FTS5 treats punctuation specially. Quoted whitespace-separated terms keep this robust.
     terms = [t.strip('"') for t in query.replace("'", " ").replace('"', " ").split() if t.strip()]
     return " OR ".join(f'"{t}"' for t in terms[:12]) or '""'
 
@@ -197,9 +259,6 @@ def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) 
     ).fetchall()
 
     recall_intent = bool(_contains_any(q, COMPLAINT_PATTERNS))
-    # FTS tokenizers are weak for unsegmented CJK prompts. For recall-intent prompts,
-    # add a tiny corpus scan over active routines so Chinese trigger_phrases/aliases can
-    # match by substring. Routine count is intentionally capped/small in the MVP.
     seen = {row["id"] for row in rows}
     if recall_intent or not rows:
         extra = conn.execute("SELECT *, 0.0 AS rank FROM routines WHERE status IN ('active')").fetchall()
@@ -210,7 +269,6 @@ def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) 
         routine = row_to_routine(row)
         why: list[str] = []
         raw_rank = float(row["rank"] or 0.0)
-        # SQLite bm25 is lower-is-better and often negative; map to a bounded useful component.
         fts_score = min(0.50, max(0.0, abs(raw_rank) / 10.0))
         score = fts_score
 

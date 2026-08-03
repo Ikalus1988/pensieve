@@ -66,6 +66,20 @@ checklist:
 ...
 ```
 
+
+## Lifecycle commands
+
+```powershell
+pensieve reject fanuc-payload-pipeline      # mark bad match; excludes from recall
+pensieve supersede old-routine --by new-id  # retire an old routine
+pensieve stats fanuc-payload-pipeline       # show use/reject counters
+pensieve install-hook --dry-run             # preview Claude Code hook config
+pensieve install-hook                       # install UserPromptSubmit hook
+```
+
+When `pensieve hook` injects a high-confidence routine, it increments `use_count`. This is the MVP signal later used by promote-to-skill.
+
 ## Why not just memory?
 
 Facts are not enough. Pensieve recalls the workflow contract: when to use a routine, what deliverables are expected, and which checklist anchors prevent quality regressions.
+

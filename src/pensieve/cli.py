@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -6,10 +6,21 @@ import shutil
 import sys
 from pathlib import Path
 
-from .hook import hook_json
+from .hook import AUTO_INJECT_THRESHOLD, hook_json
 from .paths import default_cards_dir, default_db_path, default_home, ensure_dirs
 from .routine import load_routine
-from .store import connect, get_routine, index_cards, init_db, search, upsert_routine
+from .store import (
+    connect,
+    get_routine,
+    index_cards,
+    init_db,
+    mark_used,
+    reject_routine,
+    search,
+    stats,
+    supersede_routine,
+    upsert_routine,
+)
 
 
 def _conn(args):
@@ -90,10 +101,83 @@ def cmd_get(args) -> int:
     return 0
 
 
+def _read_hook_input(args) -> tuple[str, str]:
+    if not args.stdin:
+        return args.prompt or "", args.cwd or ""
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return args.prompt or "", args.cwd or ""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return args.prompt or raw, args.cwd or ""
+    prompt = payload.get("prompt") or payload.get("userPrompt") or payload.get("message") or args.prompt or ""
+    cwd = payload.get("cwd") or payload.get("currentWorkingDirectory") or payload.get("current_working_directory") or args.cwd or ""
+    return str(prompt), str(cwd)
+
+
 def cmd_hook(args) -> int:
+    prompt, cwd = _read_hook_input(args)
     with _conn(args) as conn:
-        hits = search(conn, args.prompt, cwd=args.cwd or "", limit=3)
+        hits = search(conn, prompt, cwd=cwd, limit=3)
+        if hits and hits[0].score >= AUTO_INJECT_THRESHOLD:
+            mark_used(conn, hits[0].routine.id)
     print(hook_json(hits))
+    return 0
+
+
+def cmd_reject(args) -> int:
+    with _conn(args) as conn:
+        routine = reject_routine(conn, args.id, persist_card=True)
+    if routine is None:
+        print(f"not found: {args.id}", file=sys.stderr)
+        return 1
+    print(f"rejected: {args.id}")
+    return 0
+
+
+def cmd_supersede(args) -> int:
+    with _conn(args) as conn:
+        routine = supersede_routine(conn, args.id, persist_card=True)
+    if routine is None:
+        print(f"not found: {args.id}", file=sys.stderr)
+        return 1
+    suffix = f" -> {args.by}" if args.by else ""
+    print(f"superseded: {args.id}{suffix}")
+    return 0
+
+
+def cmd_stats(args) -> int:
+    with _conn(args) as conn:
+        result = stats(conn, args.id)
+    if result is None:
+        print(f"not found: {args.id}", file=sys.stderr)
+        return 1
+    print(json.dumps({"id": args.id, **result}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_install_hook(args) -> int:
+    settings = Path(args.settings).expanduser() if args.settings else Path.home() / ".claude" / "settings.json"
+    command = args.command or "pensieve hook --stdin"
+    entry = {"matcher": "", "hooks": [{"type": "command", "command": command}]}
+    data = {}
+    if settings.exists():
+        data = json.loads(settings.read_text(encoding="utf-8-sig", errors="replace") or "{}")
+    hooks = data.setdefault("hooks", {})
+    event_hooks = hooks.setdefault("UserPromptSubmit", [])
+    existing = json.dumps(event_hooks, ensure_ascii=False)
+    if command not in existing:
+        event_hooks.append(entry)
+    if args.dry_run:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    if settings.exists():
+        backup = settings.with_suffix(settings.suffix + ".pensieve.bak")
+        shutil.copyfile(settings, backup)
+    settings.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"installed UserPromptSubmit hook in {settings}")
     return 0
 
 
@@ -127,9 +211,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_get)
 
     p = sub.add_parser("hook", help="Emit Claude Code UserPromptSubmit hook JSON for a prompt")
-    p.add_argument("prompt")
+    p.add_argument("prompt", nargs="?")
     p.add_argument("--cwd", default="")
+    p.add_argument("--stdin", action="store_true", help="Read Claude Code hook JSON from stdin")
     p.set_defaults(func=cmd_hook)
+
+    p = sub.add_parser("reject", help="Mark a routine as rejected and exclude it from recall")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_reject)
+
+    p = sub.add_parser("supersede", help="Mark a routine as superseded and exclude it from recall")
+    p.add_argument("id")
+    p.add_argument("--by", help="Optional replacement routine id")
+    p.set_defaults(func=cmd_supersede)
+
+    p = sub.add_parser("stats", help="Show routine use/reject counters")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_stats)
+
+    p = sub.add_parser("install-hook", help="Install a Claude Code UserPromptSubmit hook")
+    p.add_argument("--settings", help="Claude Code settings.json path")
+    p.add_argument("--command", help="Hook command to install (default: pensieve hook --stdin)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_install_hook)
     return parser
 
 
@@ -147,3 +251,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
