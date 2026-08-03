@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from .hook import AUTO_INJECT_THRESHOLD, hook_json
 from .paths import default_cards_dir, default_db_path, default_home, ensure_dirs
@@ -111,8 +112,23 @@ def _read_hook_input(args) -> tuple[str, str]:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return args.prompt or raw, args.cwd or ""
-    prompt = payload.get("prompt") or payload.get("userPrompt") or payload.get("message") or args.prompt or ""
-    cwd = payload.get("cwd") or payload.get("currentWorkingDirectory") or payload.get("current_working_directory") or args.cwd or ""
+    prompt = (
+        payload.get("prompt")
+        or payload.get("userPrompt")
+        or payload.get("user_prompt")
+        or payload.get("message")
+        or payload.get("text")
+        or args.prompt
+        or ""
+    )
+    cwd = (
+        payload.get("cwd")
+        or payload.get("currentWorkingDirectory")
+        or payload.get("current_working_directory")
+        or payload.get("workdir")
+        or args.cwd
+        or ""
+    )
     return str(prompt), str(cwd)
 
 
@@ -157,27 +173,50 @@ def cmd_stats(args) -> int:
     return 0
 
 
-def cmd_install_hook(args) -> int:
-    settings = Path(args.settings).expanduser() if args.settings else Path.home() / ".claude" / "settings.json"
-    command = args.command or "pensieve hook --stdin"
+def _load_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    return json.loads(text or "{}")
+
+
+def _install_user_prompt_hook(settings: Path, command: str, *, dry_run: bool, backup_suffix: str) -> dict[str, Any]:
     entry = {"matcher": "", "hooks": [{"type": "command", "command": command}]}
-    data = {}
-    if settings.exists():
-        data = json.loads(settings.read_text(encoding="utf-8-sig", errors="replace") or "{}")
+    data = _load_json_file(settings)
     hooks = data.setdefault("hooks", {})
     event_hooks = hooks.setdefault("UserPromptSubmit", [])
     existing = json.dumps(event_hooks, ensure_ascii=False)
     if command not in existing:
         event_hooks.append(entry)
-    if args.dry_run:
-        print(json.dumps(data, ensure_ascii=False, indent=2))
-        return 0
+    if dry_run:
+        return data
     settings.parent.mkdir(parents=True, exist_ok=True)
     if settings.exists():
-        backup = settings.with_suffix(settings.suffix + ".pensieve.bak")
+        backup = settings.with_suffix(settings.suffix + backup_suffix)
         shutil.copyfile(settings, backup)
     settings.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"installed UserPromptSubmit hook in {settings}")
+    return data
+
+
+def cmd_install_hook(args) -> int:
+    settings = Path(args.settings).expanduser() if args.settings else Path.home() / ".claude" / "settings.json"
+    command = args.command or "pensieve hook --stdin"
+    data = _install_user_prompt_hook(settings, command, dry_run=args.dry_run, backup_suffix=".pensieve.bak")
+    if args.dry_run:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        print(f"installed UserPromptSubmit hook in {settings}")
+    return 0
+
+
+def cmd_install_codex_hook(args) -> int:
+    settings = Path(args.settings).expanduser() if args.settings else Path.home() / ".codex" / "hooks.json"
+    command = args.command or "pensieve hook --stdin"
+    data = _install_user_prompt_hook(settings, command, dry_run=args.dry_run, backup_suffix=".pensieve.bak")
+    if args.dry_run:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        print(f"installed Codex UserPromptSubmit hook in {settings}")
     return 0
 
 
@@ -210,10 +249,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_get)
 
-    p = sub.add_parser("hook", help="Emit Claude Code UserPromptSubmit hook JSON for a prompt")
+    p = sub.add_parser("hook", help="Emit UserPromptSubmit hook JSON for a prompt")
     p.add_argument("prompt", nargs="?")
     p.add_argument("--cwd", default="")
-    p.add_argument("--stdin", action="store_true", help="Read Claude Code hook JSON from stdin")
+    p.add_argument("--stdin", action="store_true", help="Read hook JSON from stdin")
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("reject", help="Mark a routine as rejected and exclude it from recall")
@@ -234,6 +273,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--command", help="Hook command to install (default: pensieve hook --stdin)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_install_hook)
+
+    p = sub.add_parser("install-codex-hook", help="Install a Codex CLI UserPromptSubmit hook")
+    p.add_argument("--settings", help="Codex hooks.json path")
+    p.add_argument("--command", help="Hook command to install (default: pensieve hook --stdin)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_install_codex_hook)
     return parser
 
 
@@ -251,5 +296,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
