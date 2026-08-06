@@ -13,6 +13,15 @@ CONFIDENCE_BOOST = {"verified": 0.12, "observed": 0.04, "draft": 0.0}
 COMPLAINT_PATTERNS = [
     "之前", "上次", "以前", "你之前", "你以前", "会干", "标准化", "流程", "pipeline", "skill",
     "少了哪一步", "哪一步", "质量不行", "今天不行", "怎么现在", "不记得",
+    "回忆", "记忆", "查记忆", "搜记忆", "按例程", "不要坚持己见",
+]
+EXPLICIT_RECALL_PATTERNS = [
+    "回忆", "记忆", "查记忆", "搜记忆", "查回忆", "搜回忆", "按例程", "按流程",
+    "启动pensieve", "pensieve search", "搜索例程", "搜索流程",
+]
+CORRECTION_PATTERNS = [
+    "不要坚持己见", "别坚持己见", "不是", "我说的是", "你有", "你先查", "先搜",
+    "按我说的", "别猜", "别编", "别下结论",
 ]
 
 
@@ -234,8 +243,19 @@ def _contains_any(text: str, needles: Iterable[str]) -> list[str]:
     return [n for n in needles if n and n.lower() in text_l]
 
 
+def _nonempty_cues(routine: Routine) -> list[str]:
+    return [
+        cue
+        for cue in routine.trigger_phrases + routine.aliases + routine.tags
+        if cue and len(cue.strip()) >= 2
+    ]
+
+
 def _fts_query(query: str) -> str:
-    terms = [t.strip('"') for t in query.replace("'", " ").replace('"', " ").split() if t.strip()]
+    cleaned = query
+    for ch in "，。！？：；、（）【】《》“”‘’":
+        cleaned = cleaned.replace(ch, " ")
+    terms = [t.strip('"') for t in cleaned.replace("'", " ").replace('"', " ").split() if t.strip()]
     return " OR ".join(f'"{t}"' for t in terms[:12]) or '""'
 
 
@@ -258,9 +278,14 @@ def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) 
         (fts, max(limit * 4, 10)),
     ).fetchall()
 
-    recall_intent = bool(_contains_any(q, COMPLAINT_PATTERNS))
+    recall_matches = _contains_any(q, COMPLAINT_PATTERNS)
+    explicit_recall_matches = _contains_any(q, EXPLICIT_RECALL_PATTERNS)
+    correction_matches = _contains_any(q, CORRECTION_PATTERNS)
+    recall_intent = bool(recall_matches)
+    explicit_recall = bool(explicit_recall_matches)
+    correction_intent = bool(correction_matches)
     seen = {row["id"] for row in rows}
-    if recall_intent or not rows:
+    if recall_intent or explicit_recall or correction_intent or not rows:
         extra = conn.execute("SELECT *, 0.0 AS rank FROM routines WHERE status IN ('active')").fetchall()
         rows = list(rows) + [row for row in extra if row["id"] not in seen]
 
@@ -272,13 +297,20 @@ def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) 
         fts_score = min(0.50, max(0.0, abs(raw_rank) / 10.0))
         score = fts_score
 
-        trigger_matches = _contains_any(q, routine.trigger_phrases + routine.aliases)
+        trigger_matches = _contains_any(q, _nonempty_cues(routine))
         if trigger_matches:
             score += 0.35
             why.append("trigger: " + ", ".join(trigger_matches[:3]))
-        if recall_intent:
+        lexical_match = bool(trigger_matches)
+        if recall_intent and lexical_match:
             score += 0.12
             why.append("recall intent")
+        if explicit_recall and lexical_match:
+            score += 0.08
+            why.append("explicit recall request")
+        if correction_intent and trigger_matches:
+            score += 0.08
+            why.append("user correction")
         if cwd:
             cwd_l = cwd.lower()
             cwd_matches = [h for h in routine.cwd_hints if h and (h.lower() in cwd_l or cwd_l in h.lower())]

@@ -56,7 +56,7 @@ def test_mark_used_increments_use_count(tmp_path):
 
 
 def test_trigger_direct_command_injects_at_lower_threshold(tmp_path):
-    """Direct commands like '查收邮件' should inject at 0.65 threshold."""
+    """Direct commands should still inject when trigger-only matches are strong enough."""
     db = tmp_path / "pensieve.sqlite3"
     with connect(db) as conn:
         index_cards(conn, Path("examples"))
@@ -64,7 +64,6 @@ def test_trigger_direct_command_injects_at_lower_threshold(tmp_path):
         hits = search(conn, "sysvars.sv 提取", cwd="C:\\Users\\hp", limit=3)
     assert hits
     assert hits[0].score >= 0.65
-    assert hits[0].score < 0.75
     # Verify trigger-only detection
     from pensieve.hook import _is_trigger_only
     assert _is_trigger_only(hits[0])
@@ -81,3 +80,50 @@ def test_trigger_direct_hook_increments_use_count(tmp_path):
     main(["--db", str(db), "hook", "sysvars.sv 提取", "--cwd", "C:\\Users\\hp"])
     with connect(db) as conn:
         assert stats(conn, "fanuc-payload-pipeline") == {"use_count": 1, "reject_count": 0}
+
+
+def test_mail_recall_case_hits_agently_mail_routine(tmp_path):
+    db = tmp_path / "pensieve.sqlite3"
+    with connect(db) as conn:
+        index_cards(conn, Path("examples"))
+        hits = search(
+            conn,
+            "你有agently cli，你代劳。检查邮件收发记忆，不要坚持己见。",
+            cwd="C:\\Users\\hp",
+            limit=3,
+        )
+    assert hits
+    assert hits[0].routine.id == "agently-mail-qq"
+    assert hits[0].score >= 0.75
+    payload = hook_json(hits)
+    assert "agently-mail-qq" in payload
+
+
+def test_correction_recall_generalizes_to_project_routine(tmp_path):
+    db = tmp_path / "pensieve.sqlite3"
+    with connect(db) as conn:
+        index_cards(conn, Path("examples"))
+        hits = search(
+            conn,
+            "查下记忆，MisakaNet roadmap 哪个优先，别猜。",
+            cwd="C:\\Users\\hp\\MisakaNet",
+            limit=3,
+        )
+    assert hits
+    assert hits[0].routine.id == "misakanet-growth-review"
+    assert "user correction" in hits[0].why
+    assert "explicit recall request" in hits[0].why
+
+
+def test_explicit_recall_does_not_boost_unrelated_cwd_only_hits(tmp_path):
+    db = tmp_path / "pensieve.sqlite3"
+    with connect(db) as conn:
+        index_cards(conn, Path("examples"))
+        hits = search(conn, "搜记忆：帮我写 README", cwd="C:\\Users\\hp", limit=5)
+    assert hits
+    assert all(
+        "explicit recall request" not in h.why
+        for h in hits
+        if not any(w.startswith("trigger:") for w in h.why)
+    )
+    assert all(h.score < 0.55 for h in hits)

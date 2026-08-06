@@ -41,6 +41,23 @@ def build_context(hit: SearchHit, max_chars: int = 700) -> str:
     return text[:max_chars]
 
 
+def _candidate_line(hit: SearchHit) -> str:
+    why = "; ".join(hit.why[:2])
+    return f"- {hit.routine.id} ({hit.score:.2f}): {hit.routine.title}; {why}; load: {hit.routine.body_path}"
+
+
+def build_candidate_context(hits: list[SearchHit], max_chars: int = 700) -> str:
+    candidates = [h for h in hits if h.score >= CANDIDATE_THRESHOLD]
+    if not candidates:
+        return ""
+    lines = [
+        "[Pensieve routine candidates]",
+        "User appears to be asking for recall; inspect before concluding no tool/routine exists.",
+    ]
+    lines.extend(_candidate_line(h) for h in candidates[:3])
+    return "\n".join(lines)[:max_chars]
+
+
 def should_inject(hit: SearchHit) -> bool:
     """Return whether a hit is strong enough for hook context injection."""
     return hit.score >= _effective_threshold(hit)
@@ -50,8 +67,11 @@ def hook_json(hits: list[SearchHit]) -> str:
     if not hits:
         return "{}"
     if not should_inject(hits[0]):
-        return "{}"
-    context = build_context(hits[0])
+        context = build_candidate_context(hits)
+        if not context:
+            return "{}"
+    else:
+        context = build_context(hits[0])
     return json.dumps(
         {
             "hookSpecificOutput": {
