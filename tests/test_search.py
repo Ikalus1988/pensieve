@@ -1,5 +1,6 @@
 ﻿from pathlib import Path
 
+from pensieve.routine import parse_simple_yaml
 from pensieve.store import connect, index_cards, mark_used, reject_routine, search, stats, supersede_routine
 from pensieve.hook import hook_json
 
@@ -13,6 +14,43 @@ def test_search_cjk_recall_phrase(tmp_path):
     assert hits
     assert hits[0].routine.id == "fanuc-payload-pipeline"
     assert hits[0].score >= 0.75
+
+
+def test_cjk_query_hits_trigram_and_like_fallback(tmp_path):
+    db = tmp_path / "pensieve.sqlite3"
+    with connect(db) as conn:
+        index_cards(conn, Path("examples"))
+        hits = search(conn, "负载重心", cwd="C:\\Users\\hp", limit=3)
+    assert hits
+    assert hits[0].routine.id == "fanuc-payload-pipeline"
+    assert hits[0].score >= 0.6
+
+
+def test_init_db_rebuilds_non_trigram_fts(tmp_path):
+    db = tmp_path / "pensieve.sqlite3"
+    with connect(db) as conn:
+        conn.execute(
+            "CREATE VIRTUAL TABLE routine_fts USING fts5(id UNINDEXED, title, aliases, trigger_phrases, checklist, body)"
+        )
+        conn.commit()
+        from pensieve.store import init_db
+
+        init_db(conn)
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='routine_fts'"
+        ).fetchone()[0]
+    assert "trigram" in sql.lower()
+
+
+def test_parse_simple_yaml_handles_scalar_then_list():
+    parsed = parse_simple_yaml(
+        """id: demo
+aliases: primary
+aliases:
+  - fallback
+"""
+    )
+    assert parsed["aliases"] == ["fallback"]
 
 
 def test_hook_injects_high_confidence_match(tmp_path):

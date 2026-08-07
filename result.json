@@ -1,8 +1,8 @@
 {
   "schema_version": "hydra/result/v0.1",
   "workbench_id": "local",
-  "assignment_id": "pensieve-generalized-recall-routing",
-  "run_id": "local-run-2",
+  "assignment_id": "pensieve-pr3-migration-fix",
+  "run_id": "local-run-3",
   "outcome": "completed",
   "report_file": "report.md"
 }

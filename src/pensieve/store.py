@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import re
 import sqlite3
 from typing import Iterable
 
@@ -61,17 +62,40 @@ def init_db(conn: sqlite3.Connection) -> None:
             reject_count INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE VIRTUAL TABLE IF NOT EXISTS routine_fts USING fts5(
-            id UNINDEXED,
-            title,
-            aliases,
-            trigger_phrases,
-            checklist,
-            body
-        );
         """
     )
+    _ensure_trigram_fts(conn)
     conn.commit()
+
+
+def _ensure_trigram_fts(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'routine_fts'"
+    ).fetchone()
+    sql = (row["sql"] or "").lower() if row else ""
+    if row and "tokenize='trigram'" not in sql and 'tokenize="trigram"' not in sql:
+        conn.execute("DROP TABLE routine_fts")
+        row = None
+    if row is None:
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE routine_fts USING fts5(
+                id UNINDEXED,
+                title,
+                aliases,
+                trigger_phrases,
+                checklist,
+                body,
+                tokenize='trigram'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO routine_fts (id,title,aliases,trigger_phrases,checklist,body)
+            SELECT id,title,aliases,trigger_phrases,checklist,body FROM routines
+            """
+        )
 
 
 def _dump(value: list[str]) -> str:
@@ -259,6 +283,30 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in terms[:12]) or '""'
 
 
+def _has_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
+
+
+def _cjk_terms(text: str) -> list[str]:
+    terms = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]{2,}", text)
+    if not terms:
+        terms = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", text)
+    return terms
+
+
+def _routine_search_text(routine: Routine) -> str:
+    return " ".join(
+        [
+            routine.title,
+            *routine.trigger_phrases,
+            *routine.aliases,
+            *routine.tags,
+            *routine.checklist,
+            routine.body,
+        ]
+    ).lower()
+
+
 def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) -> list[SearchHit]:
     init_db(conn)
     q = query.strip()
@@ -285,6 +333,25 @@ def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) 
     explicit_recall = bool(explicit_recall_matches)
     correction_intent = bool(correction_matches)
     seen = {row["id"] for row in rows}
+    cjk_terms = _cjk_terms(q) if _has_cjk(q) else []
+    if cjk_terms:
+        for term in cjk_terms[:3]:
+            like_rows = conn.execute(
+                """
+                SELECT *, 1.0 AS rank FROM routines
+                WHERE status IN ('active')
+                  AND (
+                    title LIKE ? OR aliases LIKE ? OR trigger_phrases LIKE ?
+                    OR checklist LIKE ? OR tags LIKE ? OR body LIKE ?
+                  )
+                """,
+                (f"%{term}%",) * 6,
+            ).fetchall()
+            for row in like_rows:
+                if row["id"] not in seen:
+                    rows.append(row)
+                    seen.add(row["id"])
+
     if recall_intent or explicit_recall or correction_intent or not rows:
         extra = conn.execute("SELECT *, 0.0 AS rank FROM routines WHERE status IN ('active')").fetchall()
         rows = list(rows) + [row for row in extra if row["id"] not in seen]
@@ -296,6 +363,12 @@ def search(conn: sqlite3.Connection, query: str, cwd: str = "", limit: int = 5) 
         raw_rank = float(row["rank"] or 0.0)
         fts_score = min(0.50, max(0.0, abs(raw_rank) / 10.0))
         score = fts_score
+
+        if cjk_terms:
+            cjk_hits = sum(1 for term in cjk_terms if term.lower() in _routine_search_text(routine))
+            if cjk_hits:
+                score = max(score, min(0.55, 0.30 * cjk_hits))
+                why.append("cjk match")
 
         trigger_matches = _contains_any(q, _nonempty_cues(routine))
         if trigger_matches:
