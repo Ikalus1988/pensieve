@@ -110,7 +110,11 @@ def _read_hook_input(args) -> tuple[str, str]:
         return args.prompt or "", args.cwd or ""
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        print(
+            f"warning: invalid JSON on stdin ({exc.msg}); falling back to raw text",
+            file=sys.stderr,
+        )
         return args.prompt or raw, args.cwd or ""
     prompt = (
         payload.get("prompt")
@@ -201,7 +205,11 @@ def _install_user_prompt_hook(settings: Path, command: str, *, dry_run: bool, ba
 def cmd_install_hook(args) -> int:
     settings = Path(args.settings).expanduser() if args.settings else Path.home() / ".claude" / "settings.json"
     command = args.command or "pensieve hook --stdin"
-    data = _install_user_prompt_hook(settings, command, dry_run=args.dry_run, backup_suffix=".pensieve.bak")
+    try:
+        data = _install_user_prompt_hook(settings, command, dry_run=args.dry_run, backup_suffix=".pensieve.bak")
+    except PermissionError as exc:
+        print(f"error: cannot write to {settings.parent} ({exc})", file=sys.stderr)
+        return 3
     if args.dry_run:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
@@ -212,7 +220,11 @@ def cmd_install_hook(args) -> int:
 def cmd_install_codex_hook(args) -> int:
     settings = Path(args.settings).expanduser() if args.settings else Path.home() / ".codex" / "hooks.json"
     command = args.command or "pensieve hook --stdin"
-    data = _install_user_prompt_hook(settings, command, dry_run=args.dry_run, backup_suffix=".pensieve.bak")
+    try:
+        data = _install_user_prompt_hook(settings, command, dry_run=args.dry_run, backup_suffix=".pensieve.bak")
+    except PermissionError as exc:
+        print(f"error: cannot write to {settings.parent} ({exc})", file=sys.stderr)
+        return 3
     if args.dry_run:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:

@@ -167,25 +167,42 @@ def get_routine(conn: sqlite3.Connection, routine_id: str) -> Routine | None:
 
 
 def _update_card_status(routine: Routine, status: str) -> None:
+    """Rewrite `status:` line in a routine's Markdown frontmatter.
+
+    Uses the same `_FRONTMATTER_RE` parser as `routine.load_routine` so that
+    a `---` literal embedded inside a frontmatter value (rare but YAML-legal)
+    cannot trick this writer into splitting the frontmatter at the wrong
+    offset.
+
+    Silently no-ops if the file is missing, not .md, or has no frontmatter.
+    """
+    from .routine import _FRONTMATTER_RE
+
     path = Path(routine.body_path)
     if not path.exists() or path.suffix.lower() != ".md":
         return
     text = path.read_text(encoding="utf-8").lstrip("\ufeff")
-    if not text.startswith("---\n"):
+    match = _FRONTMATTER_RE.match(text)
+    if match is None:
         return
-    end = text.find("\n---", 4)
-    if end == -1:
-        return
-    fm = text[4:end].splitlines()
+    head, end = text[: match.start()], match.end()
+    fm_block = match.group(1)
+    lines = fm_block.splitlines()
     changed = False
-    for i, line in enumerate(fm):
-        if line.strip().startswith("status:"):
-            fm[i] = f"status: {status}"
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("status:") or stripped.startswith("status :"):
+            lines[i] = f"status: {status}"
             changed = True
             break
     if not changed:
-        fm.append(f"status: {status}")
-    path.write_text("---\n" + "\n".join(fm) + text[end:], encoding="utf-8")
+        lines.append(f"status: {status}")
+    new_fm = "\n".join(lines)
+    # Rebuild: head + "---\n" + new frontmatter + "\n---" + original tail
+    # after the closing fence. Using match.end() (start of "\n---" or end of
+    # document) keeps the rest of the file byte-identical to the original.
+    new_text = head + "---\n" + new_fm + "\n---" + text[match.end():]
+    path.write_text(new_text, encoding="utf-8")
 
 
 def set_status(conn: sqlite3.Connection, routine_id: str, status: str, *, persist_card: bool = True) -> Routine | None:
