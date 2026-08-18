@@ -84,4 +84,17 @@ When `pensieve hook` injects a high-confidence routine, it increments `use_count
 
 Facts are not enough. Pensieve recalls the workflow contract: when to use a routine, what deliverables are expected, and which checklist anchors prevent quality regressions.
 
+## 📚 Documentation
+
+| Doc | 用途 |
+|---|---|
+| [docs/PR_MAKING.md](docs/PR_MAKING.md) | **贡献者必读** — PR 起草 / 测试契约 / hook JSON 契约 / 自检清单 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 整体架构 / 数据流 / 模块边界(规划中,见 PR_MAKING §9) |
+| [docs/CLAUDE_CODE_HOOK.md](docs/CLAUDE_CODE_HOOK.md) | Claude Code `UserPromptSubmit` hook 安装 |
+| [docs/CODEX_HOOK.md](docs/CODEX_HOOK.md) | Codex CLI `UserPromptSubmit` hook 安装 |
+| [docs/VALIDATION.md](docs/VALIDATION.md) | v0.1.0 实测矩阵(2 routine / 6 prompt / 阈值表) |
+| [docs/PRD_NOTES.md](docs/PRD_NOTES.md) | 产品版本路线(v0.1 manual → v0.4 Mem0) |
+
+提 PR 之前先看 [docs/PR_MAKING.md](docs/PR_MAKING.md)。
+
 
