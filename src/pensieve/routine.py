@@ -6,7 +6,18 @@ import re
 from typing import Any
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
-_LIST_KEYS = {"aliases", "trigger_phrases", "cwd_hints", "checklist", "deliverables", "tags", "source_sessions"}
+_LIST_KEYS = {
+    "aliases",
+    "trigger_phrases",
+    "cwd_hints",
+    "checklist",
+    "deliverables",
+    "tags",
+    "source_sessions",
+    "references",
+    "lesson_links",
+    "federation",
+}
 
 
 @dataclass
@@ -23,6 +34,9 @@ class Routine:
     deliverables: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     source_sessions: list[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
+    lesson_links: list[str] = field(default_factory=list)
+    federation: list[str] = field(default_factory=list)
     body: str = ""
     body_path: str = ""
 
@@ -108,6 +122,9 @@ def load_routine(path: Path) -> Routine:
         deliverables=as_list("deliverables"),
         tags=as_list("tags"),
         source_sessions=as_list("source_sessions"),
+        references=as_list("references"),
+        lesson_links=as_list("lesson_links"),
+        federation=as_list("federation"),
         body=body.strip(),
         body_path=str(path),
     )
